@@ -139,7 +139,6 @@
 #endif // Z_COMMON_BUNDLED
 /* ============================================================================ */
 
-
 /*
  * zthread.h — Portable threads, mutexes, and synchronization primitives
  * Part of Zen Development Kit (ZDK)
@@ -153,18 +152,17 @@
  * • Type-safe thread creation macros (zthread_create).
  * • Unified Mutex and Condition Variable primitives.
  * • Optional short names via ZTHREAD_SHORT_NAMES.
+ * • Full C++ RAII wrappers (z_thread::thread, z_thread::mutex).
  * • Zero dependencies (only standard system headers).
  *
  * License: MIT
  * Author: Zuhaitz
  * Repository: https://github.com/z-libs/zthread.h
- * Version: 1.0.0
+ * Version: 1.1.0
  */
 
 #ifndef ZTHREAD_H
 #define ZTHREAD_H
-
-#include <stdlib.h>
 // [Bundled] "zcommon.h" is included inline in this same file
 
 #ifdef _WIN32
@@ -183,6 +181,11 @@
     typedef pthread_cond_t zcond_t;
     // Internal POSIX thread signature.
 #   define ZTHREAD_Func void*
+#endif
+
+// C++ moment.
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 // Allocator overrides (user may redefine).
@@ -207,7 +210,7 @@ typedef void (*zthread_proxy_fn)(void* arg);
 
 // Our API.
 
-// Internal raw creation function (void* hell, yuck).
+// Internal raw creation function. Returns Z_OK on success.
 int zthread__create_ptr(zthread_t *t, zthread_proxy_fn func, void *arg);
 
 /* * Type-safe creation macro.
@@ -272,6 +275,244 @@ void zcond_destroy(zcond_t *c);
 #   define cond_destroy    zcond_destroy
 #endif
 
+#ifdef __cplusplus
+}
+#endif
+
+// namespace: z_thread.
+#ifdef __cplusplus
+
+#include <utility>
+#include <exception>
+#include <functional>
+
+namespace z_thread 
+{
+    class mutex 
+    {
+        ::zmutex_t inner;
+        friend class cond;
+
+     public:
+        // RAII: Initialize on construction.
+        mutex() 
+        { 
+            ::zmutex_init(&inner); 
+        }
+
+        // RAII: Destroy on destruction.
+        ~mutex() 
+        { 
+            ::zmutex_destroy(&inner); 
+        }
+
+        // Non-copyable.
+        mutex(const mutex&) = delete;
+        mutex &operator=(const mutex&) = delete;
+
+        void lock() 
+        { 
+            ::zmutex_lock(&inner); 
+        }
+
+        void unlock() 
+        { 
+            ::zmutex_unlock(&inner); 
+        }
+        
+        // Raw access if needed.
+        ::zmutex_t *native_handle() 
+        { 
+            return &inner; 
+        }
+    };
+
+    // Simple RAII lock guard (scoped lock).
+    class lock_guard 
+    {
+        mutex& m_mutex;
+     public:
+        explicit lock_guard(mutex& m) : m_mutex(m) 
+        { 
+            m_mutex.lock(); 
+        }
+
+        ~lock_guard() 
+        { 
+            m_mutex.unlock(); 
+        }
+        
+        // Non-copyable.
+        lock_guard(const lock_guard&) = delete;
+        lock_guard &operator=(const lock_guard&) = delete;
+    };
+
+    class cond 
+    {
+        ::zcond_t inner;
+
+     public:
+        cond() 
+        { 
+            ::zcond_init(&inner); 
+        }
+
+        ~cond() 
+        { 
+            ::zcond_destroy(&inner); 
+        }
+
+        // Non-copyable.
+        cond(const cond&) = delete;
+        cond &operator=(const cond&) = delete;
+
+        void wait(mutex &m) 
+        { 
+            ::zcond_wait(&inner, &m.inner); 
+        }
+
+        void signal() 
+        { 
+            ::zcond_signal(&inner); 
+        }
+
+        void broadcast() 
+        { 
+            ::zcond_broadcast(&inner);
+        }
+        
+        ::zcond_t *native_handle() 
+        { 
+            return &inner; 
+        }
+    };
+
+    class thread 
+    {
+        ::zthread_t inner;
+        bool joinable;
+
+        // Internal proxy for C++ lambdas/functions.
+        struct impl_base 
+        { 
+            virtual void run() = 0; 
+            virtual ~impl_base() {} 
+        };
+        
+        template <typename Func>
+        struct impl_type : impl_base 
+        {
+            Func f;
+            impl_type(Func &&func) : f(std::forward<Func>(func)) {}
+            void run() override { f(); }
+        };
+
+        // Static thunk matching zthread_proxy_fn signature (void(*)(void*)).
+        static void proxy_thunk(void *arg) 
+        {
+            impl_base *p = static_cast<impl_base*>(arg);
+            p->run();
+            delete p;
+        }
+
+    public:
+        thread() : joinable(false) 
+        {
+#           ifdef _WIN32
+            inner = NULL;
+#           else
+            inner = 0;
+#           endif
+        }
+
+        // Move constructor.
+        thread(thread &&other) noexcept : inner(other.inner), joinable(other.joinable) 
+        {
+            other.joinable = false;
+#           ifdef _WIN32
+            other.inner = NULL;
+#           else
+            other.inner = 0;
+#           endif
+        }
+
+        thread &operator=(thread &&other) noexcept 
+        {
+            if (joinable) 
+            {
+                std::terminate();
+            }
+            inner = other.inner;
+            joinable = other.joinable;
+            other.joinable = false;
+            return *this;
+        }
+
+        // Standard thread constructor (Function + Args).
+        // Usage: z_thread::thread t([]{ printf("Hello"); });
+        template <typename Function, typename... Args>
+        explicit thread(Function &&f, Args&&... args) 
+        {
+            auto bound_func = std::bind(std::forward<Function>(f), std::forward<Args>(args)...);
+
+            impl_base* p = new impl_type<decltype(bound_func)>(std::move(bound_func));
+            
+            if (::zthread__create_ptr(&inner, proxy_thunk, p) == Z_OK) 
+            {
+                joinable = true;
+            } 
+            else 
+            {
+                delete p; // Cleanup if creation failed.
+                joinable = false;
+            }
+        }
+
+        ~thread() 
+        {
+            if (joinable) 
+            {
+                std::terminate();
+            }
+        }
+
+        void join() 
+        {
+            if (joinable) 
+            {
+                ::zthread_join(inner);
+                joinable = false;
+            }
+        }
+
+        void detach() 
+        {
+            if (joinable) 
+            {
+                ::zthread_detach(inner);
+                joinable = false;
+            }
+        }
+
+        bool joinable_state() const 
+        { 
+            return joinable; 
+        }
+
+        ::zthread_t native_handle() 
+        { 
+            return inner; 
+        }
+        
+        static void sleep(int ms) 
+        { 
+            ::zthread_sleep(ms); 
+        }
+    };
+}
+
+#endif // __cplusplus
+
 #ifdef ZTHREAD_IMPLEMENTATION
 
 struct zthread__wrap 
@@ -284,11 +525,10 @@ struct zthread__wrap
 static unsigned __stdcall zthread__proxy_entry(void *p) 
 {
     struct zthread__wrap *w = (struct zthread__wrap*)p;
-    w->f(w->arg);
+    w->f(w->arg); 
     ZTHREAD_FREE(w); 
     return 0;
 }
-
 int zthread__create_ptr(zthread_t *t, zthread_proxy_fn func, void *arg) 
 {
     struct zthread__wrap *w = (struct zthread__wrap*)ZTHREAD_MALLOC(sizeof(*w)); 
@@ -374,7 +614,7 @@ void zcond_destroy(zcond_t *c)
 static void* zthread__proxy_entry(void *p) 
 {
     struct zthread__wrap *w = (struct zthread__wrap*)p;
-    w->f(w->arg);
+    w->f(w->arg); 
     ZTHREAD_FREE(w); 
     return NULL;
 }
@@ -458,4 +698,4 @@ void zcond_destroy(zcond_t *c)
 #endif
 
 #endif // ZTHREAD_IMPLEMENTATION
-#endif // ZTHREAD_H 
+#endif // ZTHREAD_H
