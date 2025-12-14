@@ -1,7 +1,7 @@
 
 # zthread.h
 
-`zthread.h` brings **portable multithreading** to C. It abstracts Win32 and POSIX threads into a unified, type-safe API, allowing you to write concurrent code that runs natively on Windows, Linux, and macOS without complex build configurations.
+`zthread.h` brings **portable multithreading** to C, with C++ native-like support. It abstracts Win32 and POSIX threads into a unified, type-safe API, allowing you to write concurrent code that runs natively on Windows, Linux, and macOS without complex build configurations.
 
 It is designed to be **zero friction** - handling the differences between `pthreads` and `CreateThread` internally so you can focus on your logic.
 
@@ -146,7 +146,7 @@ int main(void)
 #include "zthread.h"
 ```
 
-## API Reference
+## API Reference (C)
 
 **Thread Management**
 
@@ -176,6 +176,65 @@ int main(void)
 | `zcond_signal(c)` | Wakes up **one** waiting thread. |
 | `zcond_broadcast(c)` | Wakes up **all** waiting threads. |
 | `zcond_destroy(c)` | Frees condition variable resources. |
+
+## API Reference (C++)
+
+The C++ wrapper lives in the **`z_thread`** namespace. It strictly adheres to RAII principles and delegates all logic to the underlying C implementation.
+
+### `class z_thread::thread`
+
+**Constructors & Management**
+
+| Method | Description |
+| :--- | :--- |
+| `thread()` | Default constructor (empty/inactive). |
+| `thread(Func&& f, Args&&...)` | Spawns a new thread executing `f` with arguments. |
+| `~thread()` | Destructor. Terminates if thread is still joinable. |
+| `operator=` | Move assignment operator. |
+
+**Control & State**
+
+| Method | Description |
+| :--- | :--- |
+| `join()` | Blocks until the thread finishes execution. |
+| `detach()` | Detaches the thread (runs independently). |
+| `joinable_state()` | Returns `true` if the thread is active and joinable. |
+| `native_handle()` | Returns the underlying `zthread_t` handle. |
+| `sleep(ms)` | **Static**. Sleeps the current thread for `ms` milliseconds. |
+
+### `class z_thread::mutex`
+
+**Management & Locking**
+
+| Method | Description |
+| :--- | :--- |
+| `mutex()` | Default constructor. Initializes the mutex. |
+| `~mutex()` | Destructor. Destroys the mutex resources. |
+| `lock()` | Acquires the lock (blocks if already taken). |
+| `unlock()` | Releases the lock. |
+| `native_handle()` | Returns pointer to underlying `zmutex_t`. |
+
+### `class z_thread::lock_guard`
+
+**RAII Locking**
+
+| Method | Description |
+| :--- | :--- |
+| `lock_guard(mutex& m)` | Acquires lock on construction. |
+| `~lock_guard()` | Releases lock on destruction. |
+
+### `class z_thread::cond`
+
+**Waiting & Signaling**
+
+| Method | Description |
+| :--- | :--- |
+| `cond()` | Default constructor. Initializes the condition variable. |
+| `~cond()` | Destructor. Destroys the condition variable. |
+| `wait(mutex& m)` | Atomically unlocks `m` and waits for a signal. Relocks on return. |
+| `signal()` | Wakes up **one** waiting thread. |
+| `broadcast()` | Wakes up **all** waiting threads. |
+| `native_handle()` | Returns pointer to underlying `zcond_t`. |
 
 ## Configuration Options
 
