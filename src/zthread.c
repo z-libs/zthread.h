@@ -1,3 +1,4 @@
+
 /*
  * zthread.h — Portable threads, mutexes, and synchronization primitives
  * Part of Zen Development Kit (ZDK)
@@ -17,7 +18,7 @@
  * License: MIT
  * Author: Zuhaitz
  * Repository: https://github.com/z-libs/zthread.h
- * Version: 1.1.0
+ * Version: 1.1.2
  */
 
 #ifndef ZTHREAD_H
@@ -36,6 +37,7 @@
 #else
 #   include <pthread.h>
 #   include <unistd.h>
+#   include <time.h>
     typedef pthread_t zthread_t;
     typedef pthread_mutex_t zmutex_t;
     typedef pthread_cond_t zcond_t;
@@ -373,7 +375,11 @@ namespace z_thread
 
 #endif // __cplusplus
 
+#endif // ZTHREAD_H
+
 #ifdef ZTHREAD_IMPLEMENTATION
+#ifndef ZTHREAD_IMPLEMENTATION_GUARD
+#define ZTHREAD_IMPLEMENTATION_GUARD
 
 struct zthread__wrap 
 { 
@@ -509,7 +515,10 @@ void zthread_detach(zthread_t t)
 
 void zthread_sleep(int ms) 
 { 
-    usleep(ms * 1000); 
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000;
+    nanosleep(&ts, NULL);
 }
 
 void zmutex_init(zmutex_t *m) 
@@ -557,5 +566,6 @@ void zcond_destroy(zcond_t *c)
 }
 #endif
 
+#endif // ZTHREAD_IMPLEMENTATION_GUARD
+
 #endif // ZTHREAD_IMPLEMENTATION
-#endif // ZTHREAD_H
